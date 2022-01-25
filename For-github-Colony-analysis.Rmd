@@ -1,0 +1,448 @@
+
+#Scripts for--Inter-colony comparisons of gut microbiome composition from lab reared Eastern subterranean termites (Blattodea: Rhinotermitidae)
+
+
+#source("https://bioconductor.org/biocLite.R")
+install.packages ("phyloseq")
+install.packages("BiocManager")
+library (BiocManager)
+library(phyloseq)
+
+#Data manipulation
+##Load Packages
+
+library(naniar)
+library(zoo)
+
+#Analyses of Phylogenetics and Evolution package. Required for tree calculations to be used with phyloseq
+install.packages("ape")
+install.packages("phangorn")
+install.packages("VennDiagram")
+
+library(ape)
+
+#This package will also help us more easily manipulate our data
+library(dplyr)
+
+#Graphing package used in phyloseq. To edit the default setting of a plot, you need to use functions in this package.
+library(ggplot2)
+
+#This package is used to calculate and plot Venn diagrams as well as heatmaps
+library(gplots)
+
+#Linear mixed-effects models like repeated measures analysis
+library(lme4)
+
+#used to read in mothur-formatted files
+library(phangorn)
+
+#The phyloseq package seeks to address issues with multiple microbiome analysis packages by providing a set of functions that internally manage the organizing, linking, storing, and analyzing of phylogenetic sequencing data. In general, this package is used for UniFrac analyses.
+library(phyloseq)
+
+#A package to create interactive web graphics of use in 3D plots
+library(plotly)
+
+#This package will help us more easily manipulate our data, which are matrices
+library(tidyr)
+
+#The vegan package provides tools for descriptive community ecology. It has most basic functions of diversity analysis, community ordination and dissimilarity analysis. In general, this package is used for Bray-Curtis and Jaccard analyses.
+library(vegan)
+
+#Pretty Venn disgrams
+library(VennDiagram)
+
+#Load Data
+OTU = read.table("Transposed-rarified.txt", header=TRUE,check.names = FALSE, sep="\t", stringsAsFactors = F)
+#Taxonomy of each OTU
+tax = read.table("taxonomy.tsv", header=TRUE, sep="\t")
+meta = read.table("termite-meta.csv", header=TRUE, row.names=1, sep=",")
+evenness = read.table("evenness.tsv", header=TRUE, row.names=1, sep="\t")
+faith_pd = read.table("faith_pd.tsv", header=TRUE,row.names=1, sep="\t")
+observed_features = read.table("observed_features.tsv", header=TRUE, row.names=1, sep="\t")
+shannon = read.table("shannon.tsv", header=TRUE, row.names=1, sep="\t")
+```
+
+#Clean up the
+#OTU table needs to be transposed
+
+str(OTU)
+row.names(OTU) = OTU[,1]
+OTU.clean = OTU[,-1]
+str(OTU.clean)
+
+#Taxonomy table
+
+library(tidyr)
+library(devtools)
+library(tidyselect)
+library(naniar)
+
+tax2 = separate(tax, Taxon, into = c("Domain", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep=";")
+
+#All the strings that need to be removed and replaced with NA
+na_strings <- c(" s__", " g__", " f__", " o__", " c__")
+#str(tax.clean)
+tax3 = replace_with_na_all(tax2, condition = ~.x %in% na_strings)
+tax3[] <- t(apply(tax3, 1, zoo::na.locf))
+tax3 = tax3[,-1]
+tax3_mat <- as.matrix(tax3)
+
+#To get the row names back
+
+row.names(tax3_mat) <- tax2[,1]
+tax.clean <- as.data.frame(tax3_mat)
+
+#To remove all the OTUs that don't occur in our OTU.clean data set
+tax.clean = tax.clean[row.names(tax.clean) %in% colnames(OTU.clean),]
+
+#Alpha Diversity tables
+
+alpha_diversity = merge(faith_pd, evenness, by.x = 0, by.y = 0)
+alpha_diversity = merge(alpha_diversity, observed_features, by.x = "Row.names", by.y = 0)
+alpha_diversity = merge(alpha_diversity, shannon, by.x = "Row.names", by.y = 0)
+
+meta = merge(meta, alpha_diversity, by.x = 0, by.y = "Row.names")
+row.names(meta) = meta$Row.names
+meta = meta[,-1]
+
+##Order the data
+
+OTU.clean = OTU.clean[order(row.names(OTU.clean)),]
+meta = meta[order(row.names(meta)),]
+
+#Create 2x2 plot environment 
+par(mfrow = c(2, 2))
+
+#Plots
+hist(meta$shannon, main="Shannon diversity", xlab="", breaks=10)
+hist(meta$faith_pd, main="Faith phylogenetic diversity", xlab="", breaks=10)
+hist(meta$pielou_evenness, main="Evenness", xlab="", breaks=15)
+hist(meta$observed_features, main="Observed features", xlab="", breaks=15)
+
+
+meta$Colonies = factor(meta$Colonies, c("Biochem", "Whslr"))
+levels(meta$Colonies)
+
+#Create 1x1 plot environment
+par(mfrow = c(1, 4))
+#Plot
+boxplot(observed_features ~ Colonies, data=meta, ylab="Observed features", col="white")
+boxplot(shannon_entropy ~ Colonies, data=meta, ylab="Shannon diversity", col="white")
+boxplot(faith_pd ~ Colonies, data=meta, ylab="Faith phylogenetic diversity",col="white")
+boxplot(pielou_evenness ~ Colonies, data=meta, ylab="Pielou evenness",col="white")
+
+
+###Beta-diversity-Weighted and Unweighted Unifrac
+
+
+##Visualization
+library(ggplot2)
+
+Install.packages ("qiime2R")
+
+if (!requireNamespace("devtools", quietly = TRUE)){install.packages("devtools")}
+devtools::install_github("jbisanz/qiime2R") # current version is 0.99.20
+install.packages("devtools")
+
+library(qiime2R)
+library (devtools)
+
+library(qiime2R)
+library(dplyr)
+metadata = read.table("termite-meta.csv", header=TRUE, sep=",")
+#metadata <-read_q2metadata ("termite-metadata.tsv")
+#metadata<-read_q2metadata("unused files in R/termite-metadata.tsv")
+wunifrac <- read_qza ("weighted_unifrac_pcoa_results.qza")
+wunifrac$data$Vectors %>%
+  select(SampleID, PC1, PC2) %>%
+  left_join(metadata) %>%
+  #left_join(shannon_diversity) %>%
+  ggplot(aes(x=PC1, y=PC2, color=`Colonies`, shape=)) +
+  geom_point(alpha=1) + #alpha controls transparency and helps when points are overlapping
+  theme_q2r() +
+  #scale_shape_manual(values=c(16,1), name="Colonies") + #see http://www.sthda.com/sthda/RDoc/figure/graphs/r-plot-pch-symbols-points-in-r.png for numeric shape codes
+  scale_size_continuous(name="Shannon Diversity") +
+  scale_color_discrete(name="Colonies")
+  ggsave("wUF-PC1-2.pdf", height=3, width=3, device="pdf") # save a PDF 3 inches by 4 inches
+  ggsave("wUF-PC1-2_bigger.png", height=3, width=4, device="png", dpi=300) # save a PDF 3 inches by 4 inches
+  ggsave("wUF-PC1-2_bigger.pdf", height=4, width=5, device="pdf", dpi=300) # save a PDF 3 inches by 4 inches
+
+
+library(qiime2R)
+metadata = read.table("termite-meta.csv", header=TRUE, sep=",")
+#metadata <-read_q2metadata ("termite-metadata.tsv")
+#metadata<-read_q2metadata("unused files in R/termite-metadata.tsv")
+wunifrac <- read_qza ("weighted_unifrac_pcoa_results.qza")
+
+
+wunifrac$data$Vectors %>%
+  select(SampleID, PC1, PC3) %>%
+  left_join(metadata) %>%
+  #left_join(shannon) %>%
+  ggplot(aes(x=PC3, y=PC1, color=`Colonies`, shape=)) +
+  geom_point(alpha=1) + #alpha controls transparency and helps when points are overlapping
+  theme_q2r() +
+  #scale_shape_manual(values=c(16,1), name="Colonies") + #see http://www.sthda.com/sthda/RDoc/figure/graphs/r-plot-pch-symbols-points-in-r.png for numeric shape codes
+  scale_size_continuous(name="Shannon Diversity") +
+  scale_color_discrete(name="Colonies")
+  ggsave("wUF-PCoA1-3.pdf", height=3, width=4, device="pdf", dpi=300) # save a PDF 3 inches by 4 inches
+  ggsave("wUF-PCoA_bigger_1,3.png", height=4, width=5, device="png", dpi=300) # save a PDF 3 inches by 4 inches
+
+library(qiime2R)
+metadata = read.table("termite-meta.csv", header=TRUE, sep=",")
+#metadata <-read_q2metadata ("termite-metadata.tsv")
+#metadata<-read_q2metadata("unused files in R/termite-metadata.tsv")
+wunifrac <- read_qza ("weighted_unifrac_pcoa_results.qza")
+
+
+wunifrac$data$Vectors %>%
+  select(SampleID, PC2, PC3) %>%
+  left_join(metadata) %>%
+  #left_join(shannon) %>%
+  ggplot(aes(x=PC3, y=PC2, color=`Colonies`, shape=)) +
+  geom_point(alpha=1) + #alpha controls transparency and helps when points are overlapping
+  theme_q2r() +
+  #scale_shape_manual(values=c(16,1), name="Colonies") + #see http://www.sthda.com/sthda/RDoc/figure/graphs/r-plot-pch-symbols-points-in-r.png for numeric shape codes
+  scale_size_continuous(name="Shannon Diversity") +
+  scale_color_discrete(name="Colonies")
+  ggsave("wUF-PCoA_bigger_2-3.pdf", height=3, width=4, device="pdf", dpi=300) # save a PDF 3 inches by 4 inches
+  ggsave("wUF-PCoA_bigger_2-3.png", height=4, width=5, device="png", dpi=300) # save a PDF 3 inches by 4 inches
+
+library(qiime2R)
+metadata = read.table("termite-meta.csv", header=TRUE, sep=",")
+#metadata <-read_q2metadata ("termite-metadata.tsv")
+#metadata<-read_q2metadata("unused files in R/termite-metadata.tsv")
+unwunifrac <- read_qza ("unweighted_unifrac_pcoa_results.qza")
+
+unwunifrac$data$Vectors %>%
+  select(SampleID, PC3, PC2) %>%
+  left_join(metadata) %>%
+  #left_join(shannon) %>%
+  ggplot(aes(x=PC3, y=PC2, color=`Colonies`, shape=)) +
+  geom_point(alpha=1) + #alpha controls transparency and helps when points are overlapping
+  theme_q2r() +
+  #scale_shape_manual(values=c(16,1), name="Colonies") + #see http://www.sthda.com/sthda/RDoc/figure/graphs/r-plot-pch-symbols-points-in-r.png for numeric shape codes
+  scale_size_continuous(name="Shannon Diversity") +
+  scale_color_discrete(name="Colonies")
+  ggsave("UnwUF-PCoA-2-3.pdf", height=3, width=3, device="pdf") # save a PDF 3 inches by 4 inches
+  ggsave("UnwUF-PCoA_bigger-2-3.png", height=4, width=5, device="png") # save a PDF 3 inches by 4 inches
+  ggsave("UnwUF-PCoA_bigger-2-3.pdf", height=4, width=5, device="pdf") # save a PDF 3 inches by 4 inches
+
+library(qiime2R)
+metadata = read.table("termite-meta.csv", header=TRUE, sep=",")
+#metadata <-read_q2metadata ("termite-metadata.tsv")
+#metadata<-read_q2metadata("unused files in R/termite-metadata.tsv")
+unwunifrac <- read_qza ("unweighted_unifrac_pcoa_results.qza")
+
+
+unwunifrac$data$Vectors %>%
+  select(SampleID, PC1, PC2) %>%
+  left_join(metadata) %>%
+  #left_join(shannon) %>%
+  ggplot(aes(x=PC1, y=PC2, color=`Colonies`, shape=)) +
+  geom_point(alpha=1) + #alpha controls transparency and helps when points are overlapping
+  theme_q2r() +
+  #scale_shape_manual(values=c(16,1), name="Colonies") + #see http://www.sthda.com/sthda/RDoc/figure/graphs/r-plot-pch-symbols-points-in-r.png for numeric shape codes
+  scale_size_continuous(name="Shannon Diversity") +
+  scale_color_discrete(name="Colonies")
+  ggsave("UnwUF-PCoA-1-2.pdf", height=3, width=3, device="pdf") # save a PDF 3 inches by 4 inches
+  ggsave("UnwUF-PCoA_bigger-1-2.png", height=4, width=4, device="png") # save a PDF 3 inches by 4 inches
+  ggsave("UnwUF-PCoA_bigger-1-2.pdf", height=4, width=5, device="pdf") # save a PDF 3 inches by 4 inches
+
+
+
+#Other visualizations
+#Bar charts
+
+install.packages("ggplot2")
+install.packages("reshape2")
+library(ggplot2)
+library(reshape2)
+librarypackageVersion("phyloseq")
+library("phyloseq")
+library(dplyr)
+
+
+##The command on metadat needs .txt format
+library(qiime2R)
+physeq<-qza_to_phyloseq (
+    features="table.qza",
+    tree="rooted-tree.qza",
+    "termite-taxonomy.qza",
+    metadata = "Ntermite-meta.txt"
+    )
+plot_bar(physeq, fill="Phylum")
+plot_bar(physeq, fill="Phylum")
+plot_bar(physeq, x="Colonies", fill="Phylum") 
+plot_bar(physeq, x="Colonies", fill="Phylum") + geom_bar(aes(color=Phylum, fill=Phylum), stat="identity", position="stack")
+
+#And only showing the top 15 most abundant phyla
+
+#Sort the Phyla by abundance and pick the top 15
+top15P.names = sort(tapply(taxa_sums(physeq), tax_table(physeq)[, "Phylum"], sum), TRUE)[1:15]
+#Cut down the physeq data to only the top 5 Phyla
+top15P = subset_taxa(physeq, Phylum %in% names(top15P.names))
+#Plot
+plot_bar(top15P, x="Colonies", fill="Phylum") + geom_bar(aes(color=Phylum, fill=Phylum), stat="identity", position="stack")
+
+#Sort the Phyla by abundance and pick the top 5
+top10P.names = sort(tapply(taxa_sums(physeq), tax_table(physeq)[, "Phylum"], sum), TRUE)[1:10]
+#Cut down the physeq data to only the top 10 Phyla
+top10P = subset_taxa(physeq, Phylum %in% names(top10P.names))
+#Plot
+plot_bar(top10P, x="treatment", fill="Phylum") + geom_bar(aes(color=Phylum, fill=Phylum), stat="identity", position="stack")
+
+plot_bar(physeq, fill="Family")
+plot_bar(physeq, fill="Family")
+plot_bar(physeq, x="treatment", fill="Family") 
+plot_bar(physeq, x="treatment", fill="Family") + geom_bar(aes(color=Family, fill=Family), stat="identity", position="stack")
+
+#And only showing the top 20 most abundant family
+
+#Sort the Phyla by abundance and pick the top 15
+top20P.names = sort(tapply(taxa_sums(physeq), tax_table(physeq)[, "Family"], sum), TRUE)[1:20]
+#Cut down the physeq data to only the top 15 Phyla
+top20P = subset_taxa(physeq, Family %in% names(top20P.names))
+#Plot
+plot_bar(top20P, x="treatment", fill="Family") + geom_bar(aes(color=Family, fill=Family), stat="identity", position="stack")
+
+#Relative abundance in phyla level
+library(qiime2R)
+physeq<-qza_to_phyloseq (
+    features="table.qza",
+    tree="rooted-tree.qza",
+    "termite-taxonomy.qza",
+    metadata = "Ntermite-meta.txt"
+    )
+# Set colors for plotting
+my_colors <- c(
+  '#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c',
+  '#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928', 
+  "#CBD588", "#5F7FC7", "#DA5724", "#508578", "#CD9BCD",
+   "#AD6F3B", "#673770","#D14285", "#652926", "#C84248", 
+  "#8569D5", "#5E738F","#D1A33D", "#8A7C64", "#599861", "black"
+)
+
+#If you want different taxonomic level, find and replace the taxonomic level listed here
+my_level <- c("Phylum")
+#rm(taxa.summary)
+
+ml ="Phylum"
+for(ml in my_level){
+  print(ml)
+  
+  taxa.summary <- physeq %>%
+    tax_glom(taxrank = ml) %>%                     # agglomerate at Family level
+    transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+    psmelt()  %>%                                           # Melt to long format
+    group_by(Sample, get(ml)) %>%
+    summarise(Abundance.average=mean(Abundance)) 
+  names(taxa.summary)[2] <- ml
+  
+  physeq.taxa.average <- taxa.summary %>% 
+    group_by(get(ml)) %>%
+    summarise(overall.average=mean(Abundance.average))
+  names(physeq.taxa.average)[1] <- ml
+  
+  # merging the phyla means with the metadata #
+  physeq_meta <- merge(taxa.summary, physeq.taxa.average)
+    
+  abund_filter <- 0.0001
+  physeq_meta_filtered <- filter(physeq_meta, overall.average>abund_filter)
+  str(physeq_meta_filtered)
+  
+  physeq_meta_filtered$Sample = factor(physeq_meta_filtered$Sample,c("BCHM1","BCHM2","BCHM3","BCHM4","WslrOld1","WslrOld2","WslrOld3","WslrOld4"))
+  unique(physeq_meta_filtered$`get(ml)`)
+  
+  
+  ##To remove extraction blank from relative abundance 
+   physeq_meta_filtered2= subset(physeq_meta_filtered, Sample == "BCHM1" |Sample == "BCHM2" |Sample == "BCHM3" |Sample == "BCHM4" |Sample == "WslrOld1"|Sample == "WslrOld2"|Sample == "WslrOld3"|Sample == "WslrOld4") 
+   
+  
+  # Plot 
+  ggplot(physeq_meta_filtered2, aes(x = Sample, y = Abundance.average, fill = Phylum)) + 
+    #facet_grid(.~subject) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = my_colors) +
+    # Remove x axis title
+    #theme(axis.title.x = element_blank()) + 
+    ylim(c(0,1)) +
+    guides(fill = guide_legend(reverse = F, keywidth = .5, keyheight = .5, ncol = 1)) +
+    theme(legend.text=element_text(size=8)) +
+    #theme(legend.position="bottom") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    ylab("Relative Abundance") + xlab("SampleID") +
+    ggtitle(paste0(ml, " (>", abund_filter * 100,"%) Composition of microbiome samples")) 
+ggsave(paste0("BarPlot_AllSamples_phylum0.0001.png"), height = 5, width= 5)
+ggsave(paste0("BarPlot_AllSamples_phylum0.0001.pdf"), height = 5, width= 5)
+}
+
+##Relative abundance in family level
+# Set colors for plotting
+# Set colors for plotting
+
+
+#If you want different taxonomic level, find and replace the taxonomic level listed here
+my_level <- c("Family")
+
+my_colors <- c(
+  '#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c',
+  '#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928', 
+  "#CBD588", "#5F7FC7", "orange","#DA5724", "#508578", "#CD9BCD",
+   "#AD6F3B", "#673770","#D14285", "#652926", "#C84248", 
+  "#8569D5", "#5E738F","#D1A33D", "#8A7C64", "#599861", "black"
+)
+ml ="Family"
+for(ml in my_level){
+  print(ml)
+  
+  taxa.summary.fam <- physeq %>%
+    tax_glom(taxrank = ml) %>%                     # agglomerate at Family level
+    transform_sample_counts(function(x) {x/sum(x)} ) %>% # Transform to rel. abundance
+    psmelt()  %>%                                           # Melt to long format
+    group_by(Sample, get(ml)) %>%
+    summarise(Abundance.average=mean(Abundance)) 
+  names(taxa.summary.fam)[2] <- ml
+  
+  physeq.taxa.average.fam <- taxa.summary.fam %>% 
+    group_by(get(ml)) %>%
+    summarise(overall.average=mean(Abundance.average))
+  names(physeq.taxa.average.fam)[1] <- ml
+  
+  # merging the phyla means with the metadata #
+  physeq_meta.fam <- merge(taxa.summary.fam, physeq.taxa.average.fam)
+    
+  abund_filter <- 0.01
+  physeq_meta_filtered.fam <- filter(physeq_meta.fam, overall.average>abund_filter)
+  str(physeq_meta_filtered.fam)
+  
+   physeq_meta_filtered.fam$Sample = factor(physeq_meta_filtered.fam$Sample, c("BCHM1","BCHM2","BCHM3","BCHM4","WslrOld1","WslrOld2","WslrOld3","WslrOld4"))
+  unique(physeq_meta_filtered.fam$`get(ml)`)
+  
+  
+  ##To remove extraction blank from relative abundance 
+   physeq_meta_filtered.fam2= subset(physeq_meta_filtered.fam, Sample == "BCHM1" |Sample == "BCHM2" |Sample == "BCHM3" |Sample == "BCHM4" |Sample == "WslrOld1"|Sample == "WslrOld2"|Sample == "WslrOld3"|Sample == "WslrOld4") 
+   
+  
+   
+  # Plot 
+  ggplot(physeq_meta_filtered.fam2, aes(x = Sample, y = Abundance.average, fill = Family)) + 
+    #facet_grid(.~subject) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = my_colors) +
+    # Remove x axis title
+    #theme(axis.title.x = element_blank()) + 
+    ylim(c(0,1)) +
+    guides(fill = guide_legend(reverse = F, keywidth = .5, keyheight = .5, ncol = 1)) +
+    theme(legend.text=element_text(size=8)) +
+    #theme(legend.position="bottom") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    ylab("Relative Abundance") + xlab("SampleID") +
+    ggtitle(paste0(ml, " (>", abund_filter * 100,"%) Composition of microbiome samples")) 
+ggsave(paste0( "BarPlot_AllSamples.fam.png"), height = 5, width= 5)
+ggsave(paste0( "BarPlot_AllSamples.fam.pdf"), height = 5, width= 5)
+}
+
+
+
+
